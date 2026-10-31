@@ -5,17 +5,18 @@ A barebones IDE built on tmux.
 One tmux session, one window per git repository, two panes per window:
 
 ```
-┌──────────────────────────┬──────────────────────────┐
-│                          │                          │
-│  editor  <->  lazygit    │  agent  <->  shell       │
-│                          │                          │
-└──────────────────────────┴──────────────────────────┘
-        prefix+g                     prefix+a
+┌────────────────────────────────┬────────────────────┐
+│                                │                    │
+│  editor  <->  lazygit           │  agent  <->  shell │
+│                                │                    │
+└────────────────────────────────┴────────────────────┘
+              prefix+g                  prefix+a
 ```
 
-Every pane starts in the repository root. The hidden side of each toggle keeps
-running in a parking session, so switching between nvim and lazygit (or between
-the agent and a shell) does not lose state.
+The left pane takes 60% of the window width; the right pane takes the remaining
+40%. Every pane starts in the repository root. The hidden side of each toggle
+keeps running in a parking session, so switching between nvim and lazygit (or
+between the agent and a shell) does not lose state.
 
 ## Requirements
 
@@ -56,7 +57,9 @@ appears again.
 
 ## Keys
 
-The dedicated server uses a bare backtick (`` ` ``) as its prefix.
+The dedicated server uses a bare backtick (`` ` ``) as its prefix. The blue
+status bar sits at the top and shows these bindings on the right as a cheat
+sheet.
 
 | Key        | Action                                      |
 |------------|---------------------------------------------|

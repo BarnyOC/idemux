@@ -327,8 +327,9 @@ open_repo() {
   tm set-option -p -t "$left" @ide_owner "$wid"
   tm select-pane -t "$left" -T 'editor'
 
+  # Give the right pane 40% so the editor/lazygit side keeps 60%.
   mapfile -d '' -t argv < <(pane_cmd "$IDE_AGENT")
-  right=$(tm split-window -h -t "$wid" -c "$repo" \
+  right=$(tm split-window -h -l 40% -t "$wid" -c "$repo" \
     -P -F '#{pane_id}' "${argv[@]}")
   tm set-option -p -t "$right" @ide_slot right
   tm set-option -p -t "$right" @ide_kind agent
@@ -381,6 +382,12 @@ toggle() {
       fi
     else
       tm join-pane -h -s "$alt" -t "$win"
+    fi
+    # Re-assert the 60/40 split after rejoining a pane.
+    if [[ $slot == left ]]; then
+      tm resize-pane -t "$alt" -x 60%
+    else
+      tm resize-pane -t "$alt" -x 40%
     fi
     tm select-pane -t "$alt"
     return 0
@@ -449,18 +456,18 @@ cleanup_orphans() {
 ensure_session() {
   BOOTSTRAP_WIN=
 
-  if tm has-session -t "=$SESSION" 2>/dev/null; then
-    set_tmux_env
-    tm source-file "$CONF"
-    ensure_parking
-  else
+  if ! tm has-session -t "=$SESSION" 2>/dev/null; then
     tmux -L "$SERVER" -f "$CONF" new-session -d -s "$SESSION" -n _bootstrap -c "$HOME"
-    set_tmux_env
-    ensure_parking
     BOOTSTRAP_WIN=$(tm list-windows -t "$SESSION" -F '#{window_id} #{window_name}' |
       awk '$2 == "_bootstrap" { print $1; exit }')
   fi
 
+  # Always re-source the config. When the server already exists (for example,
+  # the parking session outlived the IDE session), `tmux -f` is ignored and the
+  # new session would otherwise inherit stale options.
+  set_tmux_env
+  tm source-file "$CONF"
+  ensure_parking
   cleanup_orphans
 }
 
