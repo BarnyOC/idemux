@@ -60,7 +60,8 @@ Usage:
   ide reload           Reload tmux-ide.conf and clean up orphaned panes (prefix+R)
   ide help             Show this help
 
-Inside the IDE (prefix is backtick; press it twice for a literal backtick):
+Inside the IDE (prefix is Ctrl+backtick; Ctrl+Space works too):
+  prefix+Tab switch pane (left <-> right)
   prefix+g   editor <-> lazygit
   prefix+a   agent  <-> shell
   prefix+o   open more repos with fzf
@@ -362,8 +363,8 @@ toggle() {
   alt=$(tm list-panes -s -t "$PARKING" -F '#{pane_id} #{@ide_owner} #{@ide_slot}' 2>/dev/null |
     awk -v o="$win" -v s="$slot" '$2 == o && $3 == s { print $1; exit }' || true)
 
-  # The visible pane can disappear if it was killed with prefix+x. Restore
-  # the parked pane into the missing slot if we can.
+  # The visible pane can disappear if it was killed with prefix+:kill-pane.
+  # Restore the parked pane into the missing slot if we can.
   if [[ -z $cur ]]; then
     if [[ -z $alt ]]; then
       msg "no $slot pane in this window"

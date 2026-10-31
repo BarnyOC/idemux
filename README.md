@@ -57,25 +57,28 @@ appears again.
 
 ## Keys
 
-The dedicated server uses a bare backtick (`` ` ``) as its prefix. The blue
-status bar sits at the top and shows these bindings on the right as a cheat
-sheet.
+The dedicated server uses Ctrl+backtick (``C-` ``) as its prefix. The blue status
+bar sits at the top and shows these bindings on the right as a cheat sheet.
 
-| Key        | Action                                      |
-|------------|---------------------------------------------|
-| `prefix+g` | left pane: editor <-> lazygit               |
-| `prefix+a` | right pane: agent <-> shell                 |
-| `prefix+o` | open more repos with fzf                    |
-| `prefix+X` | close the current repo (with confirmation)  |
-| `prefix+R` | reload `tmux-ide.conf` and clean up panes   |
+| Key          | Action                                      |
+|--------------|---------------------------------------------|
+| `prefix+Tab` | move focus to the other pane                |
+| `prefix+g`   | left pane: editor <-> lazygit               |
+| `prefix+a`   | right pane: agent <-> shell                 |
+| `prefix+o`   | open more repos with fzf                    |
+| `prefix+X`   | close the current repo (with confirmation)  |
+| `prefix+x`   | same as above (case-insensitive shortcut)   |
+| `prefix+R`   | reload `tmux-ide.conf` and clean up panes   |
 
-`prefix+x` still kills a pane, and the normal tmux keys are untouched.
+Both `prefix+x` and `prefix+X` close the whole repo window and its parked
+panes; this replaces tmux's default `kill-pane` binding on `x`. Use
+`prefix+:kill-pane` if you really need to kill a single pane.
 
-> **Typing backticks:** because the prefix is a printable key, tmux intercepts
-> every backtick — including inside nvim, the shell, and the agent. Press it
-> twice to send one literal backtick to the pane. This is the trade-off for a
-> single-key prefix; switch back to `C-a` or `C-b` in `tmux-ide.conf` if it gets
-> in the way.
+> **Ctrl+backtick and Ctrl+Space:** most terminals cannot tell Ctrl+backtick
+> apart from Ctrl+Space — both send the NUL byte, which tmux calls `C-Space`.
+> The config therefore sets `C-Space` as a secondary prefix, so Ctrl+Space also
+> acts as the prefix. Plain backticks type normally in the shell, nvim, and the
+> agent.
 
 > **Why not `Super+g`?** Terminals do not send the Super/Windows key to tmux in
 > a usable form, so tmux cannot bind it portably. Use the prefix bindings, or
