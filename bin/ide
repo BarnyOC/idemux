@@ -1,0 +1,649 @@
+#!/usr/bin/env bash
+#
+# tmux-ide — a barebones tmux IDE.
+#
+# One tmux session, one window per repository, two panes per window:
+#   left  : editor (toggled with lazygit)
+#   right : coding agent (toggled with a plain shell)
+#
+# The script owns a dedicated tmux server (-L tmux-ide) so it never touches
+# your normal tmux setup. See README.md for the full walkthrough.
+
+set -euo pipefail
+
+SELF=$(readlink -f -- "${BASH_SOURCE[0]}")
+ROOT=$(cd -- "$(dirname -- "$SELF")/.." && pwd)
+
+CONFIG=${TMUX_IDE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/tmux-ide/config}
+SERVER=${TMUX_IDE_SERVER:-tmux-ide}
+SESSION=${TMUX_IDE_SESSION:-ide}
+PARKING=${TMUX_IDE_PARKING:-_ide_parking}
+
+CONF=${TMUX_IDE_CONF:-$ROOT/tmux-ide.conf}
+SHELL=${SHELL:-/bin/sh}
+
+BOOTSTRAP_WIN=
+WIZ_ROOTS=()
+EXISTING_ROOTS=()
+
+tm() { tmux -L "$SERVER" "$@"; }
+
+die() {
+  printf 'ide: %s\n' "$*" >&2
+  exit 1
+}
+
+msg() {
+  local client
+  client=$(tm list-clients -F '#{client_name}' 2>/dev/null | head -1 || true)
+  if [[ -n $client ]]; then
+    tm display-message -c "$client" -d 2500 "$*" 2>/dev/null || true
+  else
+    printf 'ide: %s\n' "$*" >&2
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+tmux-ide — a barebones tmux IDE
+
+Usage:
+  ide                  Start or attach to the IDE (first run: setup + picker)
+  ide open <repo>...   Open one or more repos, starting the session if needed
+  ide setup            Re-run the configuration wizard
+  ide config           Open the config file in $EDITOR
+  ide pick             Pick repos with fzf and open them (prefix+o)
+  ide repos            List the repos found under the configured roots
+  ide close [window]   Close a repo window (prefix+X)
+  ide toggle-left      Swap editor <-> lazygit (prefix+g)
+  ide toggle-right     Swap agent <-> shell (prefix+a)
+  ide reload           Reload tmux-ide.conf and clean up orphaned panes (prefix+R)
+  ide help             Show this help
+
+Inside the IDE (prefix is backtick; press it twice for a literal backtick):
+  prefix+g   editor <-> lazygit
+  prefix+a   agent  <-> shell
+  prefix+o   open more repos with fzf
+  prefix+X   close the current repo
+  prefix+R   reload configuration
+
+Config: ~/.config/tmux-ide/config (override with $TMUX_IDE_CONFIG)
+EOF
+}
+
+check_deps() {
+  local c
+  for c in tmux git; do
+    command -v "$c" >/dev/null 2>&1 || die "missing dependency: $c"
+  done
+  if ! tmux -V | awk '{ split($2, v, /[^0-9]/); exit !(v[1] > 3 || (v[1] == 3 && v[2] >= 2)) }'; then
+    die "tmux >= 3.2 is required (found $(tmux -V))"
+  fi
+  [[ -f $CONF ]] || die "tmux config not found at $CONF"
+}
+
+# ---------------------------------------------------------------- config
+
+load_config() {
+  [[ -f $CONFIG ]] || die "no config at $CONFIG (run 'ide setup')"
+
+  # shellcheck disable=SC1090
+  source "$CONFIG"
+
+  if [[ $(declare -p IDE_ROOTS 2>/dev/null || true) != "declare -a"* ]]; then
+    die "IDE_ROOTS must be an array in $CONFIG"
+  fi
+  ((${#IDE_ROOTS[@]})) || die "IDE_ROOTS is empty in $CONFIG"
+  [[ -n ${IDE_EDITOR:-} ]] || die "IDE_EDITOR is not set in $CONFIG"
+  [[ -n ${IDE_AGENT:-} ]] || die "IDE_AGENT is not set in $CONFIG"
+
+  IDE_LAZYGIT=${IDE_LAZYGIT:-lazygit}
+  IDE_SEARCH_DEPTH=${IDE_SEARCH_DEPTH:-3}
+  [[ $IDE_SEARCH_DEPTH =~ ^[0-9]+$ ]] || die "IDE_SEARCH_DEPTH must be a number"
+}
+
+ensure_config() {
+  if [[ ! -f $CONFIG ]]; then
+    if [[ -t 0 ]]; then
+      printf 'No configuration found at %s\n' "$CONFIG" >&2
+      wizard
+    else
+      die "no config at $CONFIG; run 'ide setup' from a terminal"
+    fi
+  fi
+  load_config
+}
+
+prompt_roots() {
+  local -a roots=()
+  local d r dup keep
+
+  if ((${#EXISTING_ROOTS[@]})); then
+    printf 'Current repo roots:\n' >&2
+    printf '  %s\n' "${EXISTING_ROOTS[@]}" >&2
+    read -r -p 'Keep these roots? [Y/n] ' keep || keep=n
+    if [[ ! $keep =~ ^[Nn] ]]; then
+      roots=("${EXISTING_ROOTS[@]}")
+    fi
+  fi
+
+  if ((${#roots[@]} == 0)); then
+    printf 'Add directories to search for git repos (blank to finish):\n' >&2
+    while :; do
+      read -e -r -p '  dir> ' d || break
+      [[ -z $d ]] && break
+      d=${d/#\~/$HOME}
+      if [[ ! -d $d ]]; then
+        printf '  not a directory: %s\n' "$d" >&2
+        continue
+      fi
+      d=$(realpath -- "$d")
+      dup=0
+      for r in "${roots[@]}"; do
+        [[ $r == "$d" ]] && dup=1
+      done
+      ((dup)) || roots+=("$d")
+    done
+  fi
+
+  ((${#roots[@]})) || die "at least one directory is required"
+  WIZ_ROOTS=("${roots[@]}")
+}
+
+wizard() {
+  local e_editor=nvim e_agent= e_lazygit=lazygit e_depth=3
+  local editor agent lazygit depth tmp
+
+  if [[ -f $CONFIG ]]; then
+    # shellcheck disable=SC1090
+    if source "$CONFIG" 2>/dev/null; then
+      if [[ $(declare -p IDE_ROOTS 2>/dev/null || true) == "declare -a"* ]]; then
+        EXISTING_ROOTS=("${IDE_ROOTS[@]}")
+      fi
+      e_editor=${IDE_EDITOR:-$e_editor}
+      e_agent=${IDE_AGENT:-$e_agent}
+      e_lazygit=${IDE_LAZYGIT:-$e_lazygit}
+      e_depth=${IDE_SEARCH_DEPTH:-$e_depth}
+    fi
+  fi
+
+  prompt_roots
+
+  read -e -r -p "Editor command [$e_editor]: " editor || editor=
+  editor=${editor:-$e_editor}
+
+  while :; do
+    read -e -r -p "Agent command (e.g. claude, aider, codex)${e_agent:+ [$e_agent]}: " agent || agent=
+    agent=${agent:-$e_agent}
+    [[ -n $agent ]] && break
+    printf '  an agent command is required\n' >&2
+  done
+
+  read -e -r -p "Lazygit command [$e_lazygit]: " lazygit || lazygit=
+  lazygit=${lazygit:-$e_lazygit}
+  depth=${e_depth:-3}
+
+  mkdir -p -- "$(dirname -- "$CONFIG")"
+  tmp=$(mktemp -- "${CONFIG}.XXXXXX")
+  {
+    printf '%s\n' \
+      '# tmux-ide configuration (sourced as shell code)' \
+      '# Directories searched for git repositories.' \
+      'IDE_ROOTS=('
+    local r
+    for r in "${WIZ_ROOTS[@]}"; do
+      printf '  %q\n' "$r"
+    done
+    printf '%s\n' \
+      ')' \
+      '' \
+      '# Command run in the left pane.' \
+      "$(printf 'IDE_EDITOR=%q' "$editor")" \
+      '' \
+      '# Command run in the right pane.' \
+      "$(printf 'IDE_AGENT=%q' "$agent")" \
+      '' \
+      '# Toggled into the left pane with prefix+g.' \
+      "$(printf 'IDE_LAZYGIT=%q' "$lazygit")" \
+      '' \
+      '# How many directory levels below each root to search.' \
+      "$(printf 'IDE_SEARCH_DEPTH=%q' "$depth")"
+  } >"$tmp"
+  mv -- "$tmp" "$CONFIG"
+  chmod 600 "$CONFIG"
+
+  printf 'Wrote %s\n' "$CONFIG" >&2
+}
+
+# ---------------------------------------------------------------- repos
+
+list_repos() {
+  local root
+  for root in "${IDE_ROOTS[@]}"; do
+    [[ -d $root ]] || {
+      printf 'ide: skipping missing root: %s\n' "$root" >&2
+      continue
+    }
+    find "$root" -maxdepth "$((IDE_SEARCH_DEPTH + 1))" \
+      \( -name node_modules -o -name .cache -o -name .venv -o -name venv \
+      -o -name target -o -name dist -o -name build -o -name vendor \
+      -o -name .tox -o -name .mypy_cache -o -name .pytest_cache \) -prune -o \
+      -name .git -prune -printf '%h\n' 2>/dev/null
+  done | sort -u
+}
+
+check_picker_deps() {
+  command -v fzf >/dev/null 2>&1 || die "missing dependency: fzf"
+}
+
+choose_repos() {
+  check_picker_deps
+
+  local -a repos
+  mapfile -t repos < <(list_repos)
+
+  if ((${#repos[@]} == 0)); then
+    msg "No git repos found under: ${IDE_ROOTS[*]}"
+    return 1
+  fi
+
+  printf '%s\n' "${repos[@]}" | fzf --multi --reverse \
+    --prompt 'repo> ' \
+    --header 'TAB: multi-select   ENTER: open' \
+    --preview 'git -C {} log --oneline --decorate -8 2>/dev/null; printf "\n"; git -C {} status -sb 2>/dev/null | head -20' \
+    --preview-window 'right:50%:wrap'
+}
+
+window_opt() {
+  tm show-options -w -t "$1" -v "$2" 2>/dev/null || true
+}
+
+window_name_for() {
+  local repo=$1 name candidate parent n=2
+  local existing
+  name=$(basename -- "$repo")
+  name=${name//[^A-Za-z0-9._-]/-}
+  name=${name:0:24}
+  [[ -n $name ]] || name=repo
+  candidate=$name
+  existing=$(tm list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null || true)
+
+  if grep -Fxq -- "$candidate" <<<"$existing"; then
+    parent=$(basename -- "$(dirname -- "$repo")")
+    parent=${parent//[^A-Za-z0-9._-]/-}
+    parent=${parent:0:16}
+    candidate="${parent}-${name}"
+    candidate=${candidate:0:32}
+    while grep -Fxq -- "$candidate" <<<"$existing"; do
+      candidate="${name}-${n}"
+      n=$((n + 1))
+    done
+  fi
+  printf '%s' "$candidate"
+}
+
+pane_cmd() {
+  # Print the argv used to run a command in a pane and drop to a shell after.
+  local cmd=$1
+  printf '%s\0%s\0%s\0' "$SHELL" -lc "$cmd; exec $(printf '%q' "$SHELL") -l"
+}
+
+open_repo() {
+  local repo=$1 wid r
+  local -a argv
+
+  repo=${repo/#\~/$HOME}
+  [[ -d $repo ]] || {
+    msg "not a directory: $repo"
+    return 1
+  }
+  repo=$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null) || {
+    msg "not a git repo: $1"
+    return 1
+  }
+  repo=$(realpath -- "$repo")
+
+  while IFS=$'\t' read -r wid r; do
+    if [[ $r == "$repo" ]]; then
+      printf '%s' "$wid"
+      return 0
+    fi
+  done < <(tm list-windows -t "$SESSION" -F $'#{window_id}\t#{@ide_repo}' 2>/dev/null || true)
+
+  local name
+  name=$(window_name_for "$repo")
+
+  mapfile -d '' -t argv < <(pane_cmd "$IDE_EDITOR")
+  wid=$(tm new-window -d -t "$SESSION:" -n "$name" -c "$repo" \
+    -P -F '#{window_id}' "${argv[@]}")
+
+  tm set-option -w -t "$wid" @ide_repo "$repo"
+  tm set-option -w -t "$wid" @ide_name "$name"
+
+  local left right
+  left=$(tm list-panes -t "$wid" -F '#{pane_id}' | head -1)
+  tm set-option -p -t "$left" @ide_slot left
+  tm set-option -p -t "$left" @ide_kind editor
+  tm set-option -p -t "$left" @ide_owner "$wid"
+  tm select-pane -t "$left" -T 'editor'
+
+  mapfile -d '' -t argv < <(pane_cmd "$IDE_AGENT")
+  right=$(tm split-window -h -t "$wid" -c "$repo" \
+    -P -F '#{pane_id}' "${argv[@]}")
+  tm set-option -p -t "$right" @ide_slot right
+  tm set-option -p -t "$right" @ide_kind agent
+  tm set-option -p -t "$right" @ide_owner "$wid"
+  tm select-pane -t "$right" -T 'agent'
+
+  tm select-pane -t "$left"
+  printf '%s' "$wid"
+}
+
+# ---------------------------------------------------------------- toggles
+
+toggle() {
+  local slot=$1 win=${2:-}
+  [[ -n $win ]] || win=$(tm display-message -p '#{window_id}')
+
+  local repo cur alt active kind
+  local -a argv
+
+  ensure_parking
+  repo=$(window_opt "$win" @ide_repo)
+  [[ -n $repo ]] || {
+    msg "not a repo window"
+    return 1
+  }
+
+  cur=$(tm list-panes -t "$win" -F '#{pane_id} #{@ide_slot}' |
+    awk -v s="$slot" '$2 == s { print $1; exit }')
+
+  alt=$(tm list-panes -s -t "$PARKING" -F '#{pane_id} #{@ide_owner} #{@ide_slot}' 2>/dev/null |
+    awk -v o="$win" -v s="$slot" '$2 == o && $3 == s { print $1; exit }' || true)
+
+  # The visible pane can disappear if it was killed with prefix+x. Restore
+  # the parked pane into the missing slot if we can.
+  if [[ -z $cur ]]; then
+    if [[ -z $alt ]]; then
+      msg "no $slot pane in this window"
+      return 1
+    fi
+    local other other_slot
+    other_slot=right
+    [[ $slot == right ]] && other_slot=left
+    other=$(tm list-panes -t "$win" -F '#{pane_id} #{@ide_slot}' |
+      awk -v s="$other_slot" '$2 == s { print $1; exit }')
+    if [[ -n $other ]]; then
+      if [[ $slot == left ]]; then
+        tm join-pane -h -b -s "$alt" -t "$other"
+      else
+        tm join-pane -h -s "$alt" -t "$other"
+      fi
+    else
+      tm join-pane -h -s "$alt" -t "$win"
+    fi
+    tm select-pane -t "$alt"
+    return 0
+  fi
+
+  active=$(tm display-message -p -t "$win" '#{pane_id}')
+
+  if [[ -n $alt ]]; then
+    if [[ $slot == left ]]; then
+      tm join-pane -h -s "$alt" -t "$cur"
+    else
+      tm join-pane -v -s "$alt" -t "$cur"
+    fi
+  else
+    if [[ $slot == left ]]; then
+      kind=lazygit
+      mapfile -d '' -t argv < <(pane_cmd "$IDE_LAZYGIT")
+      alt=$(tm split-window -h -t "$cur" -c "$repo" -P -F '#{pane_id}' "${argv[@]}")
+    else
+      kind=shell
+      alt=$(tm split-window -v -t "$cur" -c "$repo" -P -F '#{pane_id}' "$SHELL" -l)
+    fi
+    tm set-option -p -t "$alt" @ide_slot "$slot"
+    tm set-option -p -t "$alt" @ide_kind "$kind"
+    tm set-option -p -t "$alt" @ide_owner "$win"
+    tm select-pane -t "$alt" -T "$kind"
+  fi
+
+  # Park the pane that was visible. The incoming pane expands into its slot.
+  tm break-pane -d -s "$cur" -t "$PARKING:"
+
+  if [[ $active == "$cur" ]]; then
+    tm select-pane -t "$alt"
+  else
+    tm select-pane -t "$active"
+  fi
+}
+
+# ---------------------------------------------------------------- session
+
+set_tmux_env() {
+  tm set-environment -g TMUX_IDE_BIN "$SELF"
+  tm set-environment -g TMUX_IDE_CONFIG "$CONFIG"
+  tm set-environment -g TMUX_IDE_CONF "$CONF"
+  tm set-environment -g TMUX_IDE_SERVER "$SERVER"
+  tm set-environment -g TMUX_IDE_SESSION "$SESSION"
+  tm set-environment -g TMUX_IDE_PARKING "$PARKING"
+}
+
+ensure_parking() {
+  if ! tm has-session -t "=$PARKING" 2>/dev/null; then
+    tm new-session -d -s "$PARKING" -n _parking -c "$HOME"
+  fi
+}
+
+cleanup_orphans() {
+  local pane owner
+  while IFS=$'\t' read -r pane owner; do
+    [[ -n $owner ]] || continue
+    if ! tm list-windows -t "$SESSION" -F '#{window_id}' 2>/dev/null | grep -Fxq -- "$owner"; then
+      tm kill-pane -t "$pane" 2>/dev/null || true
+    fi
+  done < <(tm list-panes -s -t "$PARKING" -F $'#{pane_id}\t#{@ide_owner}' 2>/dev/null || true)
+}
+
+ensure_session() {
+  BOOTSTRAP_WIN=
+
+  if tm has-session -t "=$SESSION" 2>/dev/null; then
+    set_tmux_env
+    tm source-file "$CONF"
+    ensure_parking
+  else
+    tmux -L "$SERVER" -f "$CONF" new-session -d -s "$SESSION" -n _bootstrap -c "$HOME"
+    set_tmux_env
+    ensure_parking
+    BOOTSTRAP_WIN=$(tm list-windows -t "$SESSION" -F '#{window_id} #{window_name}' |
+      awk '$2 == "_bootstrap" { print $1; exit }')
+  fi
+
+  cleanup_orphans
+}
+
+finish_start() {
+  [[ -n ${BOOTSTRAP_WIN:-} ]] || return 0
+  tm kill-window -t "$BOOTSTRAP_WIN" 2>/dev/null || true
+  BOOTSTRAP_WIN=
+}
+
+close_repo() {
+  local win=${1:-}
+  [[ -n $win ]] || win=$(tm display-message -p '#{window_id}')
+
+  local repo pane owner
+  repo=$(window_opt "$win" @ide_repo)
+  [[ -n $repo ]] || {
+    msg "not a repo window"
+    return 1
+  }
+
+  while IFS=$'\t' read -r pane owner; do
+    [[ $owner == "$win" ]] && tm kill-pane -t "$pane" 2>/dev/null || true
+  done < <(tm list-panes -s -t "$PARKING" -F $'#{pane_id}\t#{@ide_owner}' 2>/dev/null || true)
+
+  tm kill-window -t "$win"
+}
+
+attach() {
+  if [[ -n ${TMUX:-} ]]; then
+    case $TMUX in
+      */"$SERVER",*) tm switch-client -t "$SESSION" ;;
+      *) tm attach -t "$SESSION" ;;
+    esac
+  else
+    tm attach -t "$SESSION"
+  fi
+}
+
+# ---------------------------------------------------------------- commands
+
+cmd_open() {
+  shift
+  (($#)) || die "usage: ide open <repo>..."
+  check_deps
+  load_config
+  ensure_session
+
+  local repo wid first=
+  for repo in "$@"; do
+    wid=$(open_repo "$repo") || continue
+    [[ -n $wid ]] && first=${first:-$wid}
+  done
+
+  if [[ -z $first ]]; then
+    if [[ -n ${BOOTSTRAP_WIN:-} ]]; then
+      tm kill-session -t "=$SESSION" 2>/dev/null || true
+      tm kill-session -t "=$PARKING" 2>/dev/null || true
+    fi
+    die "no repos opened"
+  fi
+
+  finish_start
+  tm select-window -t "$first"
+}
+
+cmd_pick() {
+  check_deps
+  check_picker_deps
+  load_config
+  tm has-session -t "=$SESSION" 2>/dev/null || die "no IDE session is running"
+
+  local -a sel
+  mapfile -t sel < <(choose_repos)
+  ((${#sel[@]})) || return 0
+
+  local repo wid first=
+  for repo in "${sel[@]}"; do
+    wid=$(open_repo "$repo") || continue
+    [[ -n $wid ]] && first=${first:-$wid}
+  done
+
+  [[ -n $first ]] && tm select-window -t "$first"
+  return 0
+}
+
+cmd_reload() {
+  load_config
+  [[ -f $CONF ]] || die "tmux config not found at $CONF"
+  tm has-session -t "=$SESSION" 2>/dev/null || die "no IDE session is running"
+  set_tmux_env
+  tm source-file "$CONF"
+  ensure_parking
+  cleanup_orphans
+  msg "tmux-ide reloaded"
+}
+
+cmd_config() {
+  ensure_config
+  exec "${VISUAL:-${EDITOR:-vi}}" "$CONFIG"
+}
+
+main_flow() {
+  check_deps
+  ensure_config
+
+  if tm has-session -t "=$SESSION" 2>/dev/null; then
+    set_tmux_env
+    tm source-file "$CONF"
+    ensure_parking
+    cleanup_orphans
+    attach
+    return 0
+  fi
+
+  check_picker_deps
+  local -a sel
+  mapfile -t sel < <(choose_repos)
+  if ((${#sel[@]} == 0)); then
+    printf 'ide: no repo selected, not starting\n' >&2
+    return 0
+  fi
+
+  ensure_session
+
+  local repo wid first=
+  for repo in "${sel[@]}"; do
+    wid=$(open_repo "$repo") || continue
+    [[ -n $wid ]] && first=${first:-$wid}
+  done
+
+  if [[ -z $first ]]; then
+    if [[ -n ${BOOTSTRAP_WIN:-} ]]; then
+      tm kill-session -t "=$SESSION" 2>/dev/null || true
+      tm kill-session -t "=$PARKING" 2>/dev/null || true
+    fi
+    die "no repos opened"
+  fi
+
+  finish_start
+  tm select-window -t "$first"
+  attach
+}
+
+case ${1:-} in
+  help | -h | --help)
+    usage
+    ;;
+  setup)
+    wizard
+    ;;
+  config)
+    cmd_config
+    ;;
+  open)
+    cmd_open "$@"
+    ;;
+  pick)
+    cmd_pick
+    ;;
+  repos)
+    check_deps
+    load_config
+    list_repos
+    ;;
+  close)
+    load_config
+    close_repo "${2:-}"
+    ;;
+  toggle-left)
+    load_config
+    toggle left "${2:-}"
+    ;;
+  toggle-right)
+    load_config
+    toggle right "${2:-}"
+    ;;
+  reload)
+    cmd_reload
+    ;;
+  "")
+    main_flow
+    ;;
+  *)
+    die "unknown command: $1 (try 'ide help')"
+    ;;
+esac
