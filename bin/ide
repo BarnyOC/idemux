@@ -328,9 +328,9 @@ open_repo() {
   tm set-option -p -t "$left" @ide_owner "$wid"
   tm select-pane -t "$left" -T 'editor'
 
-  # Give the right pane 40% so the editor/lazygit side keeps 60%.
+  #Set initial pane split 
   mapfile -d '' -t argv < <(pane_cmd "$IDE_AGENT")
-  right=$(tm split-window -h -l 40% -t "$wid" -c "$repo" \
+  right=$(tm split-window -h -l 33% -t "$wid" -c "$repo" \
     -P -F '#{pane_id}' "${argv[@]}")
   tm set-option -p -t "$right" @ide_slot right
   tm set-option -p -t "$right" @ide_kind agent
@@ -384,11 +384,11 @@ toggle() {
     else
       tm join-pane -h -s "$alt" -t "$win"
     fi
-    # Re-assert the 60/40 split after rejoining a pane.
+    # Re-assert the split after rejoining a pane.
     if [[ $slot == left ]]; then
-      tm resize-pane -t "$alt" -x 60%
+      tm resize-pane -t "$alt" -x 66%
     else
-      tm resize-pane -t "$alt" -x 40%
+      tm resize-pane -t "$alt" -x 33%
     fi
     tm select-pane -t "$alt"
     return 0
