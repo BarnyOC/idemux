@@ -180,3 +180,9 @@ IDE_EDITOR='nvim -O'
 | Key does nothing | Make sure you are on the `idemux` server, then run `idemux reload`. |
 | Stale session or panes | `tmux -L idemux kill-server`, then `idemux` again. |
 | Want a fresh config | Delete `~/.config/idemux/config` and run `idemux`. |
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+Copyright (c) 2026 Barnaby O'Callaghan.
