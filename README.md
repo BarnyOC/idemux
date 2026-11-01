@@ -13,10 +13,10 @@ One tmux session, one window per git repository, two panes per window:
               prefix+g                  prefix+a
 ```
 
-The left pane takes 60% of the window width; the right pane takes the remaining
-40%. Every pane starts in the repository root. The hidden side of each toggle
-keeps running in a parking session, so switching between nvim and lazygit (or
-between the agent and a shell) does not lose state.
+The right pane starts at one third of the window width; the left pane takes the
+remaining two thirds. Every pane starts in the repository root. The hidden side
+of each toggle keeps running in a parking session, so switching between nvim and
+lazygit (or between the agent and a shell) does not lose state.
 
 ## Requirements
 

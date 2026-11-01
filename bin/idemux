@@ -385,9 +385,10 @@ toggle() {
     else
       tm join-pane -h -s "$alt" -t "$win"
     fi
-    # Re-assert the split after rejoining a pane.
+    # Re-assert the split after rejoining a pane. 67% (not 66%) matches the
+    # 33% right pane exactly at the widths tmux produces (284 -> 190/93).
     if [[ $slot == left ]]; then
-      tm resize-pane -t "$alt" -x 66%
+      tm resize-pane -t "$alt" -x 67%
     else
       tm resize-pane -t "$alt" -x 33%
     fi
@@ -439,6 +440,35 @@ set_tmux_env() {
   tm set-environment -g IDEMUX_PARKING "$PARKING"
 }
 
+# ---------------------------------------------------------------- sizing
+
+# Best known terminal size as WIDTHxHEIGHT: the first attached client, else the
+# terminal running this script, else nothing.
+desired_size() {
+  local size rows cols
+  size=$(tm list-clients -F '#{client_width}x#{client_height}' 2>/dev/null | head -1)
+  if [[ -z $size ]]; then
+    if read -r rows cols < <(stty size < /dev/tty 2>/dev/null) &&
+      [[ ${rows:-0} =~ ^[0-9]+$ && ${cols:-0} =~ ^[0-9]+$ ]] &&
+      ((rows > 0 && cols > 0)); then
+      size="${cols}x${rows}"
+    fi
+  fi
+  printf '%s' "$size"
+}
+
+# tmux sizes windows created with no attached client from `default-size`
+# (80x24 unless set), then the split happens at that size. Attaching from a
+# larger terminal grows every pane by the same number of columns, so the
+# 67/33 split drifts towards 50/50. Pinning `default-size` to the real
+# terminal size before windows are created keeps the ratio correct.
+sync_default_size() {
+  local size
+  size=$(desired_size)
+  [[ -n $size ]] || return 0
+  tm set-option -g default-size "$size"
+}
+
 ensure_parking() {
   if ! tm has-session -t "=$PARKING" 2>/dev/null; then
     tm new-session -d -s "$PARKING" -n _parking -c "$HOME"
@@ -458,11 +488,25 @@ cleanup_orphans() {
 ensure_session() {
   BOOTSTRAP_WIN=
 
+  local size cols rows
+  local -a size_args=()
+  size=$(desired_size)
+  if [[ -n $size ]]; then
+    cols=${size%x*}
+    rows=${size#*x}
+    size_args=(-x "$cols" -y "$rows")
+  fi
+
   if ! tm has-session -t "=$SESSION" 2>/dev/null; then
-    tmux -L "$SERVER" -f "$CONF" new-session -d -s "$SESSION" -n _bootstrap -c "$HOME"
+    tmux -L "$SERVER" -f "$CONF" new-session -d -s "$SESSION" -n _bootstrap -c "$HOME" "${size_args[@]}"
     BOOTSTRAP_WIN=$(tm list-windows -t "$SESSION" -F '#{window_id} #{window_name}' |
       awk '$2 == "_bootstrap" { print $1; exit }')
   fi
+
+  # Windows created while no client is attached use default-size. Set it
+  # before any repo window is created so the initial split uses the real
+  # terminal width instead of 80 columns.
+  [[ -n $size ]] && tm set-option -g default-size "$size"
 
   # Always re-source the config. When the server already exists (for example,
   # the parking session outlived the IDE session), `tmux -f` is ignored and the
@@ -540,6 +584,7 @@ cmd_pick() {
   check_picker_deps
   load_config
   tm has-session -t "=$SESSION" 2>/dev/null || die "no IDE session is running"
+  sync_default_size
 
   local -a sel
   mapfile -t sel < <(choose_repos)
