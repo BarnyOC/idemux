@@ -1,4 +1,4 @@
-# tmux-ide
+# idemux
 
 A barebones IDE built on tmux.
 
@@ -28,11 +28,11 @@ between the agent and a shell) does not lose state.
 
 ## Install
 
-Keep the script in the repository; it finds `tmux-ide.conf` relative to itself.
+Keep the script in the repository; it finds `idemux.conf` relative to itself.
 
 ```sh
-git clone <this-repo> ~/gh/tmux-ide
-ln -s ~/gh/tmux-ide/bin/ide ~/.local/bin/ide
+git clone <this-repo> ~/gh/idemux
+ln -s ~/gh/idemux/bin/idemux ~/.local/bin/idemux
 ```
 
 Make sure `~/.local/bin` is on your `PATH`.
@@ -40,25 +40,25 @@ Make sure `~/.local/bin` is on your `PATH`.
 ## First run
 
 ```sh
-ide
+idemux
 ```
 
-1. If `~/.config/tmux-ide/config` does not exist, a small wizard asks for:
+1. If `~/.config/idemux/config` does not exist, a small wizard asks for:
    - one or more directories to search for git repositories
    - the editor command (default `nvim`)
    - the coding-agent command (e.g. `claude`, `aider`, `codex`)
 2. It scans those roots and opens an fzf picker. `TAB` multi-selects, `ENTER`
    opens one window per selected repository.
-3. It creates a **dedicated** tmux server (`tmux -L tmux-ide`) and attaches.
+3. It creates a **dedicated** tmux server (`tmux -L idemux`) and attaches.
 
-On later runs `ide` attaches to the existing session without showing the picker.
+On later runs `idemux` attaches to the existing session without showing the picker.
 If the IDE session is gone (for example, you closed the last repo), the picker
 appears again.
 
 ## Keys
 
-The dedicated server uses Ctrl+backtick (``C-` ``) as its prefix. The blue status
-bar sits at the top and shows these bindings on the right as a cheat sheet.
+The dedicated server uses Ctrl+backtick as its prefix. The blue status bar sits
+at the top and shows these bindings on the right as a cheat sheet.
 
 | Key          | Action                                      |
 |--------------|---------------------------------------------|
@@ -68,7 +68,7 @@ bar sits at the top and shows these bindings on the right as a cheat sheet.
 | `prefix+o`   | open more repos with fzf                    |
 | `prefix+X`   | close the current repo (with confirmation)  |
 | `prefix+x`   | same as above (case-insensitive shortcut)   |
-| `prefix+R`   | reload `tmux-ide.conf` and clean up panes   |
+| `prefix+r`   | reload `idemux.conf` and clean up panes     |
 
 Both `prefix+x` and `prefix+X` close the whole repo window and its parked
 panes; this replaces tmux's default `kill-pane` binding on `x`. Use
@@ -76,9 +76,8 @@ panes; this replaces tmux's default `kill-pane` binding on `x`. Use
 
 > **Ctrl+backtick and Ctrl+Space:** most terminals cannot tell Ctrl+backtick
 > apart from Ctrl+Space — both send the NUL byte, which tmux calls `C-Space`.
-> The config therefore sets `C-Space` as a secondary prefix, so Ctrl+Space also
-> acts as the prefix. Plain backticks type normally in the shell, nvim, and the
-> agent.
+> The config binds `C-Space`, so either key acts as the prefix. Plain backticks
+> type normally in the shell, nvim, and the agent.
 
 > **Why not `Super+g`?** Terminals do not send the Super/Windows key to tmux in
 > a usable form, so tmux cannot bind it portably. Use the prefix bindings, or
@@ -86,7 +85,7 @@ panes; this replaces tmux's default `kill-pane` binding on `x`. Use
 
 ## Config
 
-`~/.config/tmux-ide/config`, sourced as shell code:
+`~/.config/idemux/config`, sourced as shell code:
 
 ```sh
 # Directories searched for git repositories.
@@ -115,38 +114,38 @@ IDE_AGENT='aider --model sonnet'
 IDE_EDITOR='nvim -O'
 ```
 
-- `ide setup` re-runs the wizard (it offers to keep the current roots).
-- `ide config` opens the file in `$VISUAL`/`$EDITOR`.
-- Config changes are picked up the next time an `ide` subcommand runs.
-- `tmux-ide.conf` changes are applied by `prefix+R` (or the next `ide` launch).
+- `idemux setup` re-runs the wizard (it offers to keep the current roots).
+- `idemux config` opens the file in `$VISUAL`/`$EDITOR`.
+- Config changes are picked up the next time an `idemux` subcommand runs.
+- `idemux.conf` changes are applied by `prefix+r` (or the next `idemux` launch).
 
 ## Commands
 
-| Command                 | Description                                              |
-|-------------------------|----------------------------------------------------------|
-| `ide`                   | Start or attach (wizard + picker on first launch)        |
-| `ide open <repo>...`    | Open repos, starting the session if needed (no attach)   |
-| `ide pick`              | fzf picker against a running session (`prefix+o`)        |
-| `ide repos`             | Print the repos discovered under the configured roots    |
-| `ide close [window]`    | Close a repo window (`prefix+X`)                         |
-| `ide toggle-left`       | Swap editor/lazygit (`prefix+g`)                         |
-| `ide toggle-right`      | Swap agent/shell (`prefix+a`)                            |
-| `ide reload`            | Re-source the tmux config and clean up (`prefix+R`)      |
-| `ide setup`             | Re-run the config wizard                                 |
-| `ide config`            | Edit the config file                                     |
-| `ide help`              | Show usage                                               |
+| Command                  | Description                                              |
+|--------------------------|----------------------------------------------------------|
+| `idemux`                 | Start or attach (wizard + picker on first launch)        |
+| `idemux open <repo>...`  | Open repos, starting the session if needed (no attach)   |
+| `idemux pick`            | fzf picker against a running session (`prefix+o`)        |
+| `idemux repos`           | Print the repos discovered under the configured roots    |
+| `idemux close [window]`  | Close a repo window (`prefix+X`)                         |
+| `idemux toggle-left`     | Swap editor/lazygit (`prefix+g`)                         |
+| `idemux toggle-right`    | Swap agent/shell (`prefix+a`)                            |
+| `idemux reload`          | Re-source the tmux config and clean up (`prefix+r`)      |
+| `idemux setup`           | Re-run the config wizard                                 |
+| `idemux config`          | Edit the config file                                     |
+| `idemux help`            | Show usage                                               |
 
 ## How it works
 
-- **Dedicated server.** `ide` uses `tmux -L tmux-ide`, so none of these keys or
+- **Dedicated server.** `idemux` uses `tmux -L idemux`, so none of these keys or
   options leak into your normal tmux sessions. Attach manually with
-  `tmux -L tmux-ide attach -t ide`; reset everything with
-  `tmux -L tmux-ide kill-server`.
+  `tmux -L idemux attach -t idemux`; reset everything with
+  `tmux -L idemux kill-server`.
 - **Repo window.** Each repo gets a window named after its directory (duplicate
-  names are prefixed with the parent directory). The window option `@ide_repo`
+  names are prefixed with the parent directory). The window option `@idemux_repo`
   records the absolute path, so opening the same repo again focuses the
   existing window instead of creating a duplicate.
-- **State-preserving toggles.** Hidden panes live in a detached `_ide_parking`
+- **State-preserving toggles.** Hidden panes live in a detached `_idemux_parking`
   session. Toggling joins the alternate pane into the repo window and breaks
   the visible one out. Both processes keep running; nvim keeps its buffers and
   the agent keeps its conversation.
@@ -164,20 +163,20 @@ IDE_EDITOR='nvim -O'
 - If the editor, lazygit, or agent exits, that pane drops to a login shell so
   the window keeps its layout. Run the tool again in that pane, or toggle and
   use the other side.
-- Running `ide` from inside another tmux server attaches a nested client.
+- Running `idemux` from inside another tmux server attaches a nested client.
 - The status bar and window list show only repo windows; the parking session is
   separate.
 - Overridable environment variables (mostly useful for testing):
-  `TMUX_IDE_CONFIG`, `TMUX_IDE_CONF`, `TMUX_IDE_SERVER`, `TMUX_IDE_SESSION`,
-  `TMUX_IDE_PARKING`.
+  `IDEMUX_CONFIG`, `IDEMUX_CONF`, `IDEMUX_SERVER`, `IDEMUX_SESSION`,
+  `IDEMUX_PARKING`.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| `no config at ...` | Run `ide setup`. |
+| `no config at ...` | Run `idemux setup`. |
 | `tmux >= 3.2 is required` | Upgrade tmux. |
-| Picker is empty | Run `ide repos`; check the roots and `IDE_SEARCH_DEPTH`. |
-| Key does nothing | Make sure you are on the `tmux-ide` server, then run `ide reload`. |
-| Stale session or panes | `tmux -L tmux-ide kill-server`, then `ide` again. |
-| Want a fresh config | Delete `~/.config/tmux-ide/config` and run `ide`. |
+| Picker is empty | Run `idemux repos`; check the roots and `IDE_SEARCH_DEPTH`. |
+| Key does nothing | Make sure you are on the `idemux` server, then run `idemux reload`. |
+| Stale session or panes | `tmux -L idemux kill-server`, then `idemux` again. |
+| Want a fresh config | Delete `~/.config/idemux/config` and run `idemux`. |

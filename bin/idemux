@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# tmux-ide — a barebones tmux IDE.
+# idemux — a barebones tmux IDE.
 #
 # One tmux session, one window per repository, two panes per window:
 #   left  : editor (toggled with lazygit)
 #   right : coding agent (toggled with a plain shell)
 #
-# The script owns a dedicated tmux server (-L tmux-ide) so it never touches
+# The script owns a dedicated tmux server (-L idemux) so it never touches
 # your normal tmux setup. See README.md for the full walkthrough.
 
 set -euo pipefail
@@ -14,12 +14,12 @@ set -euo pipefail
 SELF=$(readlink -f -- "${BASH_SOURCE[0]}")
 ROOT=$(cd -- "$(dirname -- "$SELF")/.." && pwd)
 
-CONFIG=${TMUX_IDE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/tmux-ide/config}
-SERVER=${TMUX_IDE_SERVER:-tmux-ide}
-SESSION=${TMUX_IDE_SESSION:-ide}
-PARKING=${TMUX_IDE_PARKING:-_ide_parking}
+CONFIG=${IDEMUX_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/idemux/config}
+SERVER=${IDEMUX_SERVER:-idemux}
+SESSION=${IDEMUX_SESSION:-idemux}
+PARKING=${IDEMUX_PARKING:-_idemux_parking}
 
-CONF=${TMUX_IDE_CONF:-$ROOT/tmux-ide.conf}
+CONF=${IDEMUX_CONF:-$ROOT/idemux.conf}
 SHELL=${SHELL:-/bin/sh}
 
 BOOTSTRAP_WIN=
@@ -29,7 +29,7 @@ EXISTING_ROOTS=()
 tm() { tmux -L "$SERVER" "$@"; }
 
 die() {
-  printf 'ide: %s\n' "$*" >&2
+  printf 'idemux: %s\n' "$*" >&2
   exit 1
 }
 
@@ -39,26 +39,26 @@ msg() {
   if [[ -n $client ]]; then
     tm display-message -c "$client" -d 2500 "$*" 2>/dev/null || true
   else
-    printf 'ide: %s\n' "$*" >&2
+    printf 'idemux: %s\n' "$*" >&2
   fi
 }
 
 usage() {
   cat <<'EOF'
-tmux-ide — a barebones tmux IDE
+idemux — a barebones tmux IDE
 
 Usage:
-  ide                  Start or attach to the IDE (first run: setup + picker)
-  ide open <repo>...   Open one or more repos, starting the session if needed
-  ide setup            Re-run the configuration wizard
-  ide config           Open the config file in $EDITOR
-  ide pick             Pick repos with fzf and open them (prefix+o)
-  ide repos            List the repos found under the configured roots
-  ide close [window]   Close a repo window (prefix+X)
-  ide toggle-left      Swap editor <-> lazygit (prefix+g)
-  ide toggle-right     Swap agent <-> shell (prefix+a)
-  ide reload           Reload tmux-ide.conf and clean up orphaned panes (prefix+R)
-  ide help             Show this help
+  idemux                  Start or attach to the IDE (first run: setup + picker)
+  idemux open <repo>...   Open one or more repos, starting the session if needed
+  idemux setup            Re-run the configuration wizard
+  idemux config           Open the config file in $EDITOR
+  idemux pick             Pick repos with fzf and open them (prefix+o)
+  idemux repos            List the repos found under the configured roots
+  idemux close [window]   Close a repo window (prefix+X)
+  idemux toggle-left      Swap editor <-> lazygit (prefix+g)
+  idemux toggle-right     Swap agent <-> shell (prefix+a)
+  idemux reload           Reload idemux.conf and clean up orphaned panes (prefix+r)
+  idemux help             Show this help
 
 Inside the IDE (prefix is Ctrl+backtick; Ctrl+Space works too):
   prefix+Tab switch pane (left <-> right)
@@ -66,9 +66,9 @@ Inside the IDE (prefix is Ctrl+backtick; Ctrl+Space works too):
   prefix+a   agent  <-> shell
   prefix+o   open more repos with fzf
   prefix+X   close the current repo
-  prefix+R   reload configuration
+  prefix+r   reload configuration
 
-Config: ~/.config/tmux-ide/config (override with $TMUX_IDE_CONFIG)
+Config: ~/.config/idemux/config (override with $IDEMUX_CONFIG)
 EOF
 }
 
@@ -86,7 +86,7 @@ check_deps() {
 # ---------------------------------------------------------------- config
 
 load_config() {
-  [[ -f $CONFIG ]] || die "no config at $CONFIG (run 'ide setup')"
+  [[ -f $CONFIG ]] || die "no config at $CONFIG (run 'idemux setup')"
 
   # shellcheck disable=SC1090
   source "$CONFIG"
@@ -109,7 +109,7 @@ ensure_config() {
       printf 'No configuration found at %s\n' "$CONFIG" >&2
       wizard
     else
-      die "no config at $CONFIG; run 'ide setup' from a terminal"
+      die "no config at $CONFIG; run 'idemux setup' from a terminal"
     fi
   fi
   load_config
@@ -188,7 +188,7 @@ wizard() {
   tmp=$(mktemp -- "${CONFIG}.XXXXXX")
   {
     printf '%s\n' \
-      '# tmux-ide configuration (sourced as shell code)' \
+      '# idemux configuration (sourced as shell code)' \
       '# Directories searched for git repositories.' \
       'IDE_ROOTS=('
     local r
@@ -222,7 +222,7 @@ list_repos() {
   local root
   for root in "${IDE_ROOTS[@]}"; do
     [[ -d $root ]] || {
-      printf 'ide: skipping missing root: %s\n' "$root" >&2
+      printf 'idemux: skipping missing root: %s\n' "$root" >&2
       continue
     }
     find "$root" -maxdepth "$((IDE_SEARCH_DEPTH + 1))" \
@@ -309,7 +309,7 @@ open_repo() {
       printf '%s' "$wid"
       return 0
     fi
-  done < <(tm list-windows -t "$SESSION" -F $'#{window_id}\t#{@ide_repo}' 2>/dev/null || true)
+  done < <(tm list-windows -t "$SESSION" -F $'#{window_id}\t#{@idemux_repo}' 2>/dev/null || true)
 
   local name
   name=$(window_name_for "$repo")
@@ -318,23 +318,23 @@ open_repo() {
   wid=$(tm new-window -d -t "$SESSION:" -n "$name" -c "$repo" \
     -P -F '#{window_id}' "${argv[@]}")
 
-  tm set-option -w -t "$wid" @ide_repo "$repo"
-  tm set-option -w -t "$wid" @ide_name "$name"
+  tm set-option -w -t "$wid" @idemux_repo "$repo"
+  tm set-option -w -t "$wid" @idemux_name "$name"
 
   local left right
   left=$(tm list-panes -t "$wid" -F '#{pane_id}' | head -1)
-  tm set-option -p -t "$left" @ide_slot left
-  tm set-option -p -t "$left" @ide_kind editor
-  tm set-option -p -t "$left" @ide_owner "$wid"
+  tm set-option -p -t "$left" @idemux_slot left
+  tm set-option -p -t "$left" @idemux_kind editor
+  tm set-option -p -t "$left" @idemux_owner "$wid"
   tm select-pane -t "$left" -T 'editor'
 
   #Set initial pane split 
   mapfile -d '' -t argv < <(pane_cmd "$IDE_AGENT")
   right=$(tm split-window -h -l 33% -t "$wid" -c "$repo" \
     -P -F '#{pane_id}' "${argv[@]}")
-  tm set-option -p -t "$right" @ide_slot right
-  tm set-option -p -t "$right" @ide_kind agent
-  tm set-option -p -t "$right" @ide_owner "$wid"
+  tm set-option -p -t "$right" @idemux_slot right
+  tm set-option -p -t "$right" @idemux_kind agent
+  tm set-option -p -t "$right" @idemux_owner "$wid"
   tm select-pane -t "$right" -T 'agent'
 
   tm select-pane -t "$left"
@@ -351,16 +351,16 @@ toggle() {
   local -a argv
 
   ensure_parking
-  repo=$(window_opt "$win" @ide_repo)
+  repo=$(window_opt "$win" @idemux_repo)
   [[ -n $repo ]] || {
     msg "not a repo window"
     return 1
   }
 
-  cur=$(tm list-panes -t "$win" -F '#{pane_id} #{@ide_slot}' |
+  cur=$(tm list-panes -t "$win" -F '#{pane_id} #{@idemux_slot}' |
     awk -v s="$slot" '$2 == s { print $1; exit }')
 
-  alt=$(tm list-panes -s -t "$PARKING" -F '#{pane_id} #{@ide_owner} #{@ide_slot}' 2>/dev/null |
+  alt=$(tm list-panes -s -t "$PARKING" -F '#{pane_id} #{@idemux_owner} #{@idemux_slot}' 2>/dev/null |
     awk -v o="$win" -v s="$slot" '$2 == o && $3 == s { print $1; exit }' || true)
 
   # The visible pane can disappear if it was killed with prefix+:kill-pane.
@@ -373,7 +373,7 @@ toggle() {
     local other other_slot
     other_slot=right
     [[ $slot == right ]] && other_slot=left
-    other=$(tm list-panes -t "$win" -F '#{pane_id} #{@ide_slot}' |
+    other=$(tm list-panes -t "$win" -F '#{pane_id} #{@idemux_slot}' |
       awk -v s="$other_slot" '$2 == s { print $1; exit }')
     if [[ -n $other ]]; then
       if [[ $slot == left ]]; then
@@ -411,9 +411,9 @@ toggle() {
       kind=shell
       alt=$(tm split-window -v -t "$cur" -c "$repo" -P -F '#{pane_id}' "$SHELL" -l)
     fi
-    tm set-option -p -t "$alt" @ide_slot "$slot"
-    tm set-option -p -t "$alt" @ide_kind "$kind"
-    tm set-option -p -t "$alt" @ide_owner "$win"
+    tm set-option -p -t "$alt" @idemux_slot "$slot"
+    tm set-option -p -t "$alt" @idemux_kind "$kind"
+    tm set-option -p -t "$alt" @idemux_owner "$win"
     tm select-pane -t "$alt" -T "$kind"
   fi
 
@@ -430,12 +430,12 @@ toggle() {
 # ---------------------------------------------------------------- session
 
 set_tmux_env() {
-  tm set-environment -g TMUX_IDE_BIN "$SELF"
-  tm set-environment -g TMUX_IDE_CONFIG "$CONFIG"
-  tm set-environment -g TMUX_IDE_CONF "$CONF"
-  tm set-environment -g TMUX_IDE_SERVER "$SERVER"
-  tm set-environment -g TMUX_IDE_SESSION "$SESSION"
-  tm set-environment -g TMUX_IDE_PARKING "$PARKING"
+  tm set-environment -g IDEMUX_BIN "$SELF"
+  tm set-environment -g IDEMUX_CONFIG "$CONFIG"
+  tm set-environment -g IDEMUX_CONF "$CONF"
+  tm set-environment -g IDEMUX_SERVER "$SERVER"
+  tm set-environment -g IDEMUX_SESSION "$SESSION"
+  tm set-environment -g IDEMUX_PARKING "$PARKING"
 }
 
 ensure_parking() {
@@ -451,7 +451,7 @@ cleanup_orphans() {
     if ! tm list-windows -t "$SESSION" -F '#{window_id}' 2>/dev/null | grep -Fxq -- "$owner"; then
       tm kill-pane -t "$pane" 2>/dev/null || true
     fi
-  done < <(tm list-panes -s -t "$PARKING" -F $'#{pane_id}\t#{@ide_owner}' 2>/dev/null || true)
+  done < <(tm list-panes -s -t "$PARKING" -F $'#{pane_id}\t#{@idemux_owner}' 2>/dev/null || true)
 }
 
 ensure_session() {
@@ -483,7 +483,7 @@ close_repo() {
   [[ -n $win ]] || win=$(tm display-message -p '#{window_id}')
 
   local repo pane owner
-  repo=$(window_opt "$win" @ide_repo)
+  repo=$(window_opt "$win" @idemux_repo)
   [[ -n $repo ]] || {
     msg "not a repo window"
     return 1
@@ -491,7 +491,7 @@ close_repo() {
 
   while IFS=$'\t' read -r pane owner; do
     [[ $owner == "$win" ]] && tm kill-pane -t "$pane" 2>/dev/null || true
-  done < <(tm list-panes -s -t "$PARKING" -F $'#{pane_id}\t#{@ide_owner}' 2>/dev/null || true)
+  done < <(tm list-panes -s -t "$PARKING" -F $'#{pane_id}\t#{@idemux_owner}' 2>/dev/null || true)
 
   tm kill-window -t "$win"
 }
@@ -511,7 +511,7 @@ attach() {
 
 cmd_open() {
   shift
-  (($#)) || die "usage: ide open <repo>..."
+  (($#)) || die "usage: idemux open <repo>..."
   check_deps
   load_config
   ensure_session
@@ -562,7 +562,7 @@ cmd_reload() {
   tm source-file "$CONF"
   ensure_parking
   cleanup_orphans
-  msg "tmux-ide reloaded"
+  msg "idemux reloaded"
 }
 
 cmd_config() {
@@ -587,7 +587,7 @@ main_flow() {
   local -a sel
   mapfile -t sel < <(choose_repos)
   if ((${#sel[@]} == 0)); then
-    printf 'ide: no repo selected, not starting\n' >&2
+    printf 'idemux: no repo selected, not starting\n' >&2
     return 0
   fi
 
@@ -652,6 +652,6 @@ case ${1:-} in
     main_flow
     ;;
   *)
-    die "unknown command: $1 (try 'ide help')"
+    die "unknown command: $1 (try 'idemux help')"
     ;;
 esac
